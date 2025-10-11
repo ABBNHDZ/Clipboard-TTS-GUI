@@ -1,5 +1,7 @@
 """
-Configuration handling for the Clipboard TTS GUI.
+AppConfig — application settings for Clipboard TTS GUI
+Simple configuration container for the GUI. Handles loading/saving
+settings to a JSON file and provides helpers to bind Tkinter variables.
 """
 
 import json
@@ -8,7 +10,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_FILE = "appCfg_aTTS.json"
+SETTINGS_FILE = "aTTSappCfg.json" # Define as a constant
 
 
 class AppConfig:
@@ -16,19 +18,24 @@ class AppConfig:
 
     def __init__(self):
         # Model and device
+        self.is_loaded: bool = False
         self.model_path: str = ""
         self.device: str = "auto"
-        self.qntf: str = "fp16"
+        self.sdtype: str = "float16"
+
+        self.console: bool = False
+        self.theme : str = "clam"
+       
 
         # Voice / text
-        self.lang: str = "en"
+        self.lang: str = "fr"
         self.lang_rtl: str = "ar"
         self.lang_ltr: str = "fr"
         self.speaker: str = "Tammie Ema"
         self.speaker_wav: str = ""
 
-        self.u_lang: bool = False
-        self.u_speaker: bool = False
+        self.u_lang: bool = True
+        self.u_speaker: bool = True
         self.u_speaker_wav: bool = False
 
         # Advanced parameters
@@ -38,36 +45,59 @@ class AppConfig:
         self.repp: float = 5.0
         self.topk: int = 50
         self.topp: float = 0.85
+        self.seed: int = 0
 
  
-        self.font_size_var:int = 14   
-        self.font_family_var:str = "Arial" 
+        self.font_size:int = 14   
+        self.font_family:str = "Arial" 
         # Direction variable – Auto (default)/ RTL / LTR
-        self.text_dir_var:str = "Auto" 
-        self.text_min_var:int = 80 
-        self.text_max_var:int = 120 
+        self.text_dir:str = "Auto" 
+        self.text_min:int = 80 
+        self.text_max:int = 120 
 
-        self.u_speed: bool = False
-        self.u_temp: bool = False
-        self.u_lenp: bool = False
-        self.u_repp: bool = False
-        self.u_topk: bool = False
-        self.u_topp: bool = False
+        self.u_speed: bool = True
+        self.u_temp: bool = True
+        self.u_lenp: bool = True
+        self.u_repp: bool = True
+        self.u_topk: bool = True
+        self.u_topp: bool = True
+        self.u_seed: bool = True
         
-        self.auto_load: bool = False
+        self.auto_load: bool = True
         # Clipboard toggle
-        self.auto_clipboard: bool = False
+        self.auto_clipboard: bool = True
 
     def load_from_json(self, path: str = SETTINGS_FILE) -> bool:
         """Load settings from JSON file."""
-        try:
+        try:            
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for k, v in data.items():
-                setattr(self, k, v)
+                try:
+                    value = getattr(self, k)
+                    if isinstance(value, bool):
+                        setattr(self, k, bool(v))
+                    elif isinstance(value, int):
+                        setattr(self, k, int(v))
+                    elif isinstance(value, float):
+                        setattr(self, k, float(v))
+                    elif isinstance(value, str):
+                        setattr(self, k, v)
+                except Exception as e:
+                    logger.warning(f"Error loading setting {k}: {e}")  
+            self.is_loaded = True
             return True
+        except FileNotFoundError:
+            logger.warning(f"Config file not found: {path}")
+            self.is_loaded = False
+            return False
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to decode JSON in {path}: {e}")
+            self.is_loaded = False
+            return False
         except Exception as e:
-            logger.warning("Failed to load config: %s", e)
+            logger.warning(f"Failed to load config from {path}: {e}")
+            self.is_loaded = False
             return False
 
     def save_to_json(self, path: str = SETTINGS_FILE):
@@ -76,135 +106,91 @@ class AppConfig:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(vars(self), f, indent=4)
         except Exception as e:
-            logger.warning("Failed to save config: %s", e)
+            logger.warning(f"Failed to save config to {path}: {e}")
 
 
-# -----------------------------------------------------------
+    def set_app_Var_from_config(self,  app ) :
+        """Load settings from JSON file and set UI variables in the App."""
+        if not self.is_loaded :
+            self.is_loaded = self.load_from_json()
+        for attr in dir(self):
+            if not attr.startswith("__"):
+                value = getattr(self, attr)
+                if isinstance(value, bool):
+                    setattr(app, f"{attr}_var", tk.BooleanVar(value=value))
+                elif isinstance(value, int):
+                    setattr(app, f"{attr}_var", tk.IntVar(value=value))
+                elif isinstance(value, float):
+                    setattr(app, f"{attr}_var", tk.DoubleVar(value=value))
+                elif isinstance(value, str):
+                    setattr(app, f"{attr}_var", tk.StringVar(value=str(value)))
+    
 
-def load_config(app , cfg: AppConfig) -> None:
-    """Load settings from JSON file and set UI variables in the App."""
-    if cfg.load_from_json():
-        # Set Tkinter variable values
-        app.model_path_var.set(cfg.model_path)
-        app.device_var.set(cfg.device)
-        app.qntf_var.set(cfg.qntf)
-
-        app.lang_var.set(cfg.lang)
-        app.speaker_var.set(cfg.speaker)        
-        app.speaker_wav_var.set(cfg.speaker_wav)
-
-        app.use_lang_var.set(cfg.u_lang)
-        app.use_speaker_var.set(cfg.u_speaker)        
-        app.use_speaker_wav.set(cfg.u_speaker_wav)       
-
-        app.speed_var.set(cfg.speed)
-        app.temp.set(cfg.temp)
-        app.lenp.set(cfg.lenp)
-        app.repp.set(cfg.repp)
-        app.topk.set(cfg.topk)
-        app.topp.set(cfg.topp)
-
-        app.use_speed.set(cfg.u_speed)
-        app.use_temp.set(cfg.u_temp)
-        app.use_lenp.set(cfg.u_lenp)
-        app.use_repp.set(cfg.u_repp)
-        app.use_topk.set(cfg.u_topk)
-        app.use_topp.set(cfg.u_topp)
-
-        app.font_size_var.set(cfg.font_size_var)
-        app.font_family_var.set(cfg.font_family_var)
-        app.text_dir_var.set(cfg.text_dir_var) 
-        app.text_min_var.set(cfg.text_min_var)
-        app.text_max_var.set(cfg.text_max_var)
-
-        app.auto_load.set(cfg.auto_load)
-        app.auto_clipboard.set(cfg.auto_clipboard)
-
-        # Update the TTSManager with loaded values
-        app.ttsMan.model_path = cfg.model_path
-        app.ttsMan.device = cfg.device
-        app.ttsMan.Qntf = cfg.qntf
-        
+    def update_config_save_settings(self, app) -> None:
+        # Copy values from Tkinter variables into the config object
+        for attr in dir(self):
+            if not attr.startswith("__"):
+                if hasattr(app, f"{attr}_var"):
+                    try:
+                        value = getattr(app, f"{attr}_var").get()
+                        if isinstance(getattr(self, attr), bool):
+                            setattr(self, attr, bool(value))
+                        elif isinstance(getattr(self, attr), int):
+                            setattr(self, attr, int(value))
+                        elif isinstance(getattr(self, attr), float):
+                            setattr(self, attr, float(value))
+                        elif isinstance(getattr(self, attr), str):
+                            setattr(self, attr, str(value))
+                        else:
+                            #setattr(self, attr, str(value))
+                            i = None
+                    except Exception as e:
+                        logger.warning(f"Error saving : {attr}: {e}")                    
+        """Save current settings to JSON file."""
+        self.save_to_json()
 
 
-def save_settings(app , cfg: AppConfig) -> None:
-    """Save current settings to JSON file."""
-    # Copy values from Tkinter variables into the config object
-    cfg.model_path = str(app.model_path_var.get())
-    cfg.device = str(app.device_var.get())
-    cfg.qntf = str(app.qntf_var.get())
+    def register_trace(self, app) -> None:
+        """Bind each Tkinter variable to save settings when it changes."""                
+        var_map = [
+            app.model_path_var,
+            app.device_var,
+            app.sdtype_var,
+            
+            app.console_var,
+            app.theme_var,
 
-    cfg.lang = str(app.lang_var.get())
-    cfg.speaker = str(app.speaker_var.get())
-    cfg.speaker_wav = str(app.speaker_wav_var.get())
+            app.lang_var,
+            app.speaker_var,        
+            app.speaker_wav_var,
 
-    cfg.u_lang = bool(app.use_lang_var.get())
-    cfg.u_speaker = bool(app.use_speaker_var.get())
-    cfg.u_speaker_wav = bool(app.use_speaker_wav.get())
+            app.u_lang_var,
+            app.u_speaker_var,   
+            app.u_speaker_wav_var,
 
-    cfg.speed = float(app.speed_var.get())
-    cfg.temp = float(app.temp.get())
-    cfg.lenp = float(app.lenp.get())
-    cfg.repp = float(app.repp.get())
-    cfg.topk = int(app.topk.get())
-    cfg.topp = float(app.topp.get())
+            app.speed_var,
+            app.temp_var,
+            app.lenp_var,
+            app.repp_var,
+            app.topk_var,
+            app.topp_var,
+            app.seed_var,
 
-    cfg.u_speed = bool(app.use_speed.get())
-    cfg.u_temp = bool(app.use_temp.get())
-    cfg.u_lenp = bool(app.use_lenp.get())
-    cfg.u_repp = bool(app.use_repp.get())
-    cfg.u_topk = bool(app.use_topk.get())
-    cfg.u_topp = bool(app.use_topp.get())
+            app.u_speed_var,
+            app.u_temp_var,
+            app.u_lenp_var,
+            app.u_repp_var,
+            app.u_topk_var,
+            app.u_topp_var,
 
-    cfg.font_size_var = int(app.font_size_var.get())
-    cfg.font_family_var = str(app.font_family_var.get())
-    cfg.text_dir_var = str(app.text_dir_var.get()) 
-    cfg.text_min_var = int(app.text_min_var.get())
-    cfg.text_max_var = int(app.text_max_var.get())
+            app.auto_load_var,
+            app.auto_clipboard_var,
 
-    cfg.auto_load = bool(app.auto_load.get())
-    cfg.auto_clipboard = bool(app.auto_clipboard.get())
-    # Persist to JSON
-    cfg.save_to_json()
-
-
-def register_trace(app , cfg: AppConfig) -> None:
-    """Bind each Tkinter variable to save settings when it changes."""
-    var_map = [
-        app.model_path_var,
-        app.device_var,
-        app.qntf_var,
-
-        app.lang_var,
-        app.speaker_var,        
-        app.speaker_wav_var,
-
-        app.use_lang_var,
-        app.use_speaker_var,   
-        app.use_speaker_wav,
-
-        app.speed_var,
-        app.temp,
-        app.lenp,
-        app.repp,
-        app.topk,
-        app.topp,
-
-        app.use_speed,
-        app.use_temp,
-        app.use_lenp,
-        app.use_repp,
-        app.use_topk,
-        app.use_topp,
-
-        app.auto_load,
-        app.auto_clipboard,
-
-        app.font_size_var,
-        app.font_family_var,
-        app.text_dir_var,
-        app.text_min_var,
-        app.text_max_var,
-    ]
-    for var in var_map:
-        var.trace_add("write", lambda *_: save_settings(app, cfg))
+            app.font_size_var,
+            app.font_family_var,
+            app.text_dir_var,
+            app.text_min_var,
+            app.text_max_var,
+        ]
+        for var in var_map:
+            var.trace_add("write", lambda *_: self.update_config_save_settings(app))

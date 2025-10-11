@@ -1,13 +1,9 @@
 """
-HiFi-GAN (formaté et commenté en français).
+HiFi-GAN 
 Ce module définit :
 - ResBlock1 / ResBlock2 : blocs résiduels utilisés par le générateur
 - HifiganGenerator : générateur principal (MRF + upsampling)
 - HifiDecoder : wrapper combinant le générateur et un speaker encoder
-
-Remarque : certaines fonctions lourdes (chargement de checkpoint distant)
-peuvent être spécifiques au projet d'origine; ici on conserve l'API et des
-implémentations compatibles pour l'inférence locale.
 """
 
 import torch
@@ -16,16 +12,31 @@ from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
+import gc
+import torch_directml
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Importer un encodeur de locuteur (version existante dans xtts2_m)
-from .speaker_encoder import ResNetSpeakerEncoder
+from xtts2m.speaker_encoder import ResNetSpeakerEncoder
 
 LRELU_SLOPE = 0.1
 
+def _prenormalize_conv_weight(layer: nn.Module):
+    """Convertit une couche avec weight_norm en couche normalisée fixe."""
+    if hasattr(layer, "parametrizations") and "weight" in layer.parametrizations:
+        param = layer.parametrizations.weight[0]
+        if hasattr(param, "original"):
+            v = param.original
+            g = getattr(param, "weight_g", None)
+            dim = getattr(param, "dim", 0)
+            if g is not None:
+                with torch.no_grad():
+                    w = g * v / torch.norm(v, dim=dim, keepdim=True)
+                layer.weight = nn.Parameter(w)
+        remove_parametrizations(layer, "weight")
 
 def get_padding(kernel_size: int, dilation: int = 1) -> int:
     """Calcule le padding nécessaire pour conserver la taille temporelle."""
@@ -34,7 +45,6 @@ def get_padding(kernel_size: int, dilation: int = 1) -> int:
 
 class ResBlock1(nn.Module):
     """Bloc résiduel multi-dilation (type 1) utilisé dans HiFi-GAN."""
-
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
         super().__init__()
         self.convs1 = nn.ModuleList([
@@ -176,12 +186,41 @@ class HifiganGenerator(nn.Module):
                 ch = upsample_initial_channel // (2 ** (i + 1))
                 self.conds.append(nn.Conv1d(cond_channels, ch, 1))
 
+    def forward1(self, x, g=None):
+        # Propagation avant du générateur.
+        # x: [B, C, T] features
+        # g: [B, cond_channels, T] condition global (optionnel)
+        # retourne: waveform [B, 1, T]
+        with torch.no_grad():
+            if hasattr(self, "lin_pre"):
+                x = self.lin_pre(x)
+                x = x.permute(0, 2, 1)
+            o = self.conv_pre(x)
+            if hasattr(self, "cond_layer") and g is not None:
+                o = o + self.cond_layer(g)
+            for i in range(self.num_upsamples):
+                o = F.leaky_relu(o, LRELU_SLOPE)
+                o = self.ups[i](o)
+                if self.cond_in_each_up_layer and g is not None:
+                    o = o + self.conds[i](g)
+                z_sum = None
+                for j in range(self.num_kernels):
+                    if z_sum is None:
+                        z_sum = self.resblocks[i * self.num_kernels + j](o)
+                    else:
+                        z_sum += self.resblocks[i * self.num_kernels + j](o)
+                
+                o = z_sum / self.num_kernels
+                del z_sum
+            o = F.leaky_relu(o)
+            o = self.conv_post(o)
+            o = torch.tanh(o)
+        return o
+
     def forward(self, x, g=None):
-        """Propagation avant du générateur.
-        x: [B, C, T] features
-        g: [B, cond_channels, T] condition global (optionnel)
-        retourne: waveform [B, 1, T]
-        """
+        """Propagation avant optimisée pour torch-directml."""
+        import torch_directml, gc, time
+        device = torch_directml.device()
         if hasattr(self, "lin_pre"):
             x = self.lin_pre(x)
             x = x.permute(0, 2, 1)
@@ -189,21 +228,36 @@ class HifiganGenerator(nn.Module):
         if hasattr(self, "cond_layer") and g is not None:
             o = o + self.cond_layer(g)
         for i in range(self.num_upsamples):
+            # étape principale
             o = F.leaky_relu(o, LRELU_SLOPE)
             o = self.ups[i](o)
             if self.cond_in_each_up_layer and g is not None:
                 o = o + self.conds[i](g)
+            # bloc MRF
             z_sum = None
             for j in range(self.num_kernels):
-                if z_sum is None:
-                    z_sum = self.resblocks[i * self.num_kernels + j](o)
-                else:
-                    z_sum += self.resblocks[i * self.num_kernels + j](o)
-            o = z_sum / self.num_kernels
+                res = self.resblocks[i * self.num_kernels + j](o)
+                z_sum = res if z_sum is None else z_sum.add_(res)
+                del res  # libération immédiate
+                gc.collect()
+
+            o = z_sum.div_(self.num_kernels)
+            del z_sum
+            gc.collect()
+
+            # flush implicite GPU → CPU (force exécution DML)
+            _ = o.mean().cpu()
+            time.sleep(0.02)
+        # sortie finale
         o = F.leaky_relu(o)
         o = self.conv_post(o)
         o = torch.tanh(o)
+        # flush final
+        _ = o.mean().cpu()
+        gc.collect()
+        time.sleep(0.05)
         return o
+    
 
     @torch.inference_mode()
     def inference(self, c):
@@ -211,19 +265,32 @@ class HifiganGenerator(nn.Module):
         c = c.to(self.conv_pre.weight.device)
         c = torch.nn.functional.pad(c, (self.inference_padding, self.inference_padding), "replicate")
         return self.forward(c)
+    
+    def remove_weight_norm(self):
+        print("Pré-normalisation et suppression des weight_norm...")
 
+        for l in self.ups:
+            _prenormalize_conv_weight(l)
+        for l in self.resblocks:
+            if hasattr(l, "remove_weight_norm"):
+                l.remove_weight_norm()  # récursif
+        _prenormalize_conv_weight(self.conv_pre)
+        _prenormalize_conv_weight(self.conv_post)
+
+    """
     def remove_weight_norm(self):
         for l in self.ups:
             try:
+                l = pre_normalize_weights(l)
                 remove_parametrizations(l, "weight")
             except Exception:
                 pass
         for l in self.resblocks:
             try:
+                l = pre_normalize_weights(l)
                 l.remove_weight_norm()
             except Exception:
-                pass
-
+                pass"""
 
 class HifiDecoder(nn.Module):
     """Wrapper HiFi-GAN + SpeakerEncoder.
@@ -301,6 +368,41 @@ class HifiDecoder(nn.Module):
             x: [B, C, T]
             Tensor: [B, 1, T]
         """
+        """z = torch.nn.functional.interpolate(
+            latents.transpose(1, 2),
+            scale_factor=[self.ar_mel_length_compression / self.output_hop_length],
+            mode="area",
+        ).squeeze(1) 
+        """
+        z = torch.nn.functional.interpolate(
+            latents.transpose(1, 2).unsqueeze(-1),  # ajoute dimension H=1
+            scale_factor=(self.ar_mel_length_compression / self.output_hop_length, 1),
+            mode="bilinear",  # supporté par DirectML
+            align_corners=False,
+        ).squeeze(-1).squeeze(1)        
+        # Ajustement du sample rate (seconde interpolation)
+        if self.output_sample_rate != self.input_sample_rate:
+            z = torch.nn.functional.interpolate(
+                z.unsqueeze(-1),                    # [B, C, T', 1]
+                scale_factor=(self.output_sample_rate / self.input_sample_rate, 1),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(-1)  
+        #o = self.waveform_decoder(z, g=g)
+        return self.waveform_decoder(z, g=g)
+        #return self.waveform_decoder(latents, g=g)
+
+    def forward_No_Dml(self, latents, g=None):
+        """
+        Args:
+            x (Tensor): feature input tensor (GPT latent).
+            g (Tensor): global conditioning input tensor.
+        Returns:
+            Tensor: output waveform.
+        Shapes:
+            x: [B, C, T]
+            Tensor: [B, 1, T]
+        """
         z = torch.nn.functional.interpolate(
             latents.transpose(1, 2),
             scale_factor=[self.ar_mel_length_compression / self.output_hop_length],
@@ -315,20 +417,4 @@ class HifiDecoder(nn.Module):
             ).squeeze(0)
         o = self.waveform_decoder(z, g=g)
         return o
-        #return self.waveform_decoder(latents, g=g)
-
-    def load_checkpoint(self, checkpoint_path: str):
-        """Chargement minimal d'un checkpoint local (si présent).
-
-        Note: l'implémentation complète dépend du format des checkpoints du
-        projet. Ici on propose une méthode simple qui tente un torch.load.
-        """
-        try:
-            state = torch.load(checkpoint_path, map_location='cpu')
-            if isinstance(state, dict) and 'model' in state:
-                self.load_state_dict(state['model'])
-            else:
-                self.load_state_dict(state)
-        except Exception as e:
-            raise RuntimeError(f"Impossible de charger le checkpoint: {e}")
 

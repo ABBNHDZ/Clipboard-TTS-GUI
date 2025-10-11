@@ -1,10 +1,4 @@
 """
-Tokenizer formaté et commenté en français.
-Ce module expose une classe `VoiceBpeTokenizer` compatible avec la version originale
-présente dans `xtts2_m/tokenizer.py` mais avec des commentaires et une mise en forme
-visant à faciliter la lecture et la maintenance.
-
-Notes:
 - Les fonctions de nettoyage / expansion (nombres, abréviations, symboles) sont
   localisées ici et commentées en français.
 - La logique principale du tokenizer est inchangée : on utilise un fichier de
@@ -12,7 +6,7 @@ Notes:
 """
 
 import logging
-import re
+import re 
 from typing import List
 from functools import cached_property
 
@@ -284,6 +278,10 @@ _symbols_multilingual = {
         (re.compile(rf"{re.escape(x[0])}", re.IGNORECASE), x[1])
         for x in [('&', ' et '), ('@', ' arobase '), ('%', ' pour cent '), ('#', ' dièse '), ('$', ' dollar '), ('£', ' livre '), ('°', ' degrés ')]
     ],
+    "ar": [
+        (re.compile(rf"{re.escape(x[0])}", re.IGNORECASE), x[1])
+        for x in [('&', ' و '), ('@', ' آت '), ('%', ' بالمئة '), ('#', ' آش تاق '), ('$', ' دولار '), ('£', ' ليفر '), ('°', ' درجة مئوية ')]
+    ],
 }
 
 # Regex pour les ordinaux (1er, 2e, etc.) par langue
@@ -359,7 +357,6 @@ def expand_numbers_multilingual(text: str, lang: str = "en") -> str:
 
 def multilingual_cleaners(text: str, lang: str) -> str:
     """Nettoyage et normalisation de base utilisé avant tokenisation.
-
     Opérations réalisées :
     - suppression de certains caractères spéciaux et guillemets
     - mise en minuscule
@@ -461,7 +458,6 @@ class VoiceBpeTokenizer:
 
     def encode(self, txt: str, lang: str):
         """Encode une chaîne de caractères en identifiants de tokens.
-
         - Préfixe le texte par le code de langue entre crochets, remplace les
           espaces par le token '[SPACE]' (format spécifique du vocabulaire)
         - Retourne la liste des ids telle que fournie par `tokenizers.Tokenizer`.
@@ -480,7 +476,6 @@ class VoiceBpeTokenizer:
 
     def decode(self, seq):
         """Décodage des ids en texte.
-
         - Supporte `torch.Tensor` en entrée.
         - Remplace les tokens spéciaux internes par leur représentation lisible.
         """

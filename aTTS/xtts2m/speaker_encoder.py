@@ -1,6 +1,5 @@
 """
-Encodeur de locuteur (ResNet) formaté et commenté en français.
-
+Encodeur de locuteur (ResNet) 
 Ce module définit :
 - SELayer : couche Squeeze-and-Excitation
 - SEBasicBlock : bloc résiduel avec SE
@@ -100,11 +99,14 @@ class PreEmphasis(nn.Module):
         assert len(x.size()) == 2
         x = torch.nn.functional.pad(x.unsqueeze(1), (1, 0), "reflect")
         return torch.nn.functional.conv1d(x, self.filter).squeeze(1)
-
+        #return torch.nn.functional.conv1d(x, self.filter).squeeze(1)       
+        #filter = self.filter.clone()
+        #if x.dtype == torch.float16:
+        #    filter = filter.float()  # Cast filter to float16 if input is float16
+        #return x # torch.nn.functional.conv1d(x, filter).squeeze(1)
 
 class ResNetSpeakerEncoder(nn.Module):
     """Encodeur de locuteur basé sur ResNet + attention (ASP/SAP).
-
     - input_dim : dimension parallèle du spectrogramme (nombre de bandes mel)
     - proj_dim  : dimension de l'embedding de sortie
     - layers, num_filters : paramètres de l'architecture ResNet
@@ -112,7 +114,6 @@ class ResNetSpeakerEncoder(nn.Module):
     - use_torch_spec : si True, calcule le MelSpectrogram à la volée via torchaudio
     - audio_config : dictionnaire décrivant les paramètres du mel (sample_rate, fft_size, ...)
     """
-
     def __init__(
         self,
         input_dim=64,
@@ -223,8 +224,8 @@ class ResNetSpeakerEncoder(nn.Module):
         if self.use_torch_spec and self.torch_spec is not None:
             x = self.torch_spec(x)
 
-        if self.log_input:
-            x = (x + 1e-6).log()
+        #if self.log_input:
+        #    x = (x + 1e-6).log()
 
         # InstanceNorm attend (B, D, T)
         x = self.instancenorm(x).unsqueeze(1)

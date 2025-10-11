@@ -1,20 +1,23 @@
 """
-Configuration formatée et commentée en français pour XTTS v2.
+xtts2_m.xttsConfig — model configuration
 
-Ce module contient :
-- constantes globales (langues supportées, speakers par défaut, etc.)
-- classes de configuration : XttsConfig, ModelArgs, AudioConfig
-- fonctions utilitaires pour charger la config depuis un JSON
+Central config module holding defaults, helper functions and the main
+`XttsConfig` class. 
 
-Le contenu est basé sur `xtts2_m/xttsConfig.py` mais reformatté et
-documenté en français pour faciliter la lecture et la maintenance.
+Module central de configuration contenant les valeurs par défaut, helpers
+et la classe `XttsConfig`. 
 """
 
 import json
 import os
-import torch
 from typing import Any
+import logging
 
+from xtts2m.utils import resolve_device
+
+logger = logging.getLogger(__name__)
+
+   
 # -----------------------------------------------------------------------------
 # Constantes globales
 # -----------------------------------------------------------------------------
@@ -43,12 +46,9 @@ DEFAULT_SPEAKERS = [
 ]
 
 # Quantifications supportées (ex: précision de modèle)
-DEFAULT_QNTF = [
-    "fp32",
-    "fp16",
-    "bf16",
-    "f8e4",
-    "f8e5",
+DEFAULT_SDRYPE = [
+    "float32",
+    "float16",
 ]
 
 # Valeurs par défaut utilisées si aucune configuration externe n'est fournie
@@ -57,44 +57,23 @@ DEFAULT_SPEAKER = "Tammie Ema"
 DEFAULT_MODEL_PATH = "../model_xtts_v2/"
 
 # -----------------------------------------------------------------------------
-# Fonctions utilitaires
-# -----------------------------------------------------------------------------
-
-def _resolve_device(requested: str) -> str:
-    """Résout et normalise la chaîne `device` pour PyTorch.
-
-    - 'auto' -> 'cuda' si CUDA disponible sinon 'cpu'
-    - si 'cuda' est demandé mais non disponible, retombe sur 'cpu'
-    - sinon renvoie la valeur telle quelle
-    """
-    if requested == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    if requested == "cuda" and not torch.cuda.is_available():
-        return "cpu"
-    return requested
-
-
-# -----------------------------------------------------------------------------
 # Classe principale de configuration
 # -----------------------------------------------------------------------------
 class XttsConfig:
     """Classe de configuration pour XTTS v2.
-
     Cette classe charge des valeurs par défaut puis, si un fichier
     `config.json` est trouvé dans `model_path`, surcharge ses attributs
     avec ceux du JSON.
     """
-
     def __init__(self, model_path: str = DEFAULT_MODEL_PATH, FileName: str = "config.json", device: str = "auto"):
         # Emplacement des fichiers du modèle
         self.model_path = model_path
         self.config_fn = FileName
 
         # Device runtime (cpu / cuda)
-        self.device = _resolve_device(device)
-
+        self.device = resolve_device(device)
         # Quantification et flags d'initialisation
-        self.Qntf = "fp16"
+        self.sdtype = "float16"
         self.model_is_Initialized = False
         self.model_is_loded = False
 
@@ -245,10 +224,10 @@ class ModelArgs:
         self.clvp_checkpoint = None
         self.decoder_checkpoint = None
         self.num_chars = 255
-        self.tokenizer_file1 = "vocab.json"
-        self.speaker_file1 = "speakers_xtts.pth"
-        self.tokenizer_file = None
-        self.speaker_file = None
+        self.tokenizer_file1:str = "vocab.json"
+        self.speaker_file1:str = "speakers_xtts.pth"
+        self.tokenizer_file:str = ""
+        self.speaker_file:str = ""
         self.gpt_max_audio_tokens = 605
         self.gpt_max_text_tokens = 402
         self.gpt_max_prompt_tokens = 70
